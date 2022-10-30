@@ -40,7 +40,7 @@ client.on('connect', () => {
   console.log('Connected to MQTT broker.');
 
   client.options.reconnectPeriod = 1000;
-  client.subscribe(['voltage/main']);
+  client.subscribe(['voltage/main', 'weather/+']);
 });
 
 client.on('close', () => {
@@ -53,6 +53,15 @@ client.on('message', (topic, message) => {
   switch(topic) {
     case 'voltage/main':
       console.log('Voltage [main]: ' + parseFloat(message).toFixed(2));
+      break;
+    case 'weather/temperature':
+      console.log('Temperature: ' + parseFloat(message).toFixed(1) + 'º');
+      break;
+    case 'weather/pressure':
+      console.log('Pressure: ' + parseFloat(message).toFixed(0) + 'hPa');
+      break;
+    case 'weather/humidity':
+      console.log('Humidity: ' + parseFloat(message).toFixed(0) + '%');
       break;
   }
 });
