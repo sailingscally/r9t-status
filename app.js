@@ -20,6 +20,8 @@
  */
 
 const os = require('os');
+const mqtt = require('mqtt');
+
 const interfaces = os.networkInterfaces();
 
 for(const name of Object.keys(interfaces)) {
@@ -30,4 +32,46 @@ for(const name of Object.keys(interfaces)) {
   }
 }
 
+const client = mqtt.connect('mqtt://localhost:1883', {
+  clientId: 'r9t-status'
+});
 
+client.on('connect', () => {
+  console.log('Connected to MQTT broker.');
+
+  client.options.reconnectPeriod = 1000;
+  client.subscribe(['voltage/main']);
+});
+
+client.on('close', () => {
+  if(connected) {
+    console.log('Connection to MQTT broker lost.');
+  }
+});
+
+client.on('message', (topic, message) => {
+  switch(topic) {
+    case 'voltage/main':
+      console.log('Voltage [main]: ' + parseFloat(message).toFixed(2));
+      break;
+  }
+});
+
+client.on('error', (error) => {
+  switch(error.code) {
+    case 'ECONNREFUSED':
+       console.log(`Unable to connect to MQTT broker on ${error.address}:${error.port}.`);
+      break;
+
+    default:
+      console.log(error);
+      break;
+  }
+});
+
+/*
+ * Increase the time between connection attempts
+ */
+client.on('reconnect', () => {
+  client.options.reconnectPeriod *= 2;
+});
