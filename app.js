@@ -32,6 +32,10 @@ for(const name of Object.keys(interfaces)) {
   }
 }
 
+console.log(os.cpus());
+console.log(os.totalmem());
+console.log(os.freemem())
+
 const client = mqtt.connect('mqtt://localhost:1883', {
   clientId: 'r9t-status'
 });
@@ -40,7 +44,7 @@ client.on('connect', () => {
   console.log('Connected to MQTT broker.');
 
   client.options.reconnectPeriod = 1000;
-  client.subscribe(['voltage/main', 'weather/+']);
+  client.subscribe(['voltage/main', 'weather/+', 'alarm/weather']);
 });
 
 client.on('close', () => {
@@ -62,6 +66,9 @@ client.on('message', (topic, message) => {
       break;
     case 'weather/humidity':
       console.log('Humidity: ' + parseFloat(message).toFixed(0) + '%');
+      break;
+    case 'alarm/weather':
+      console.log('Weather alert: 0b' + message); // TODO: parse this value and give the appropriate alerts
       break;
   }
 });
