@@ -9,6 +9,9 @@
   "author": "Luis Martins",
   "license": "Apache-2.0",
   "dependencies": {
-    "mqtt": "^4.3.7"
+    "grand9k": "github:sailingscally/grand9k",
+    "mqtt": "^4.3.7",
+    "onoff": "^6.0.3",
+    "ssd1306": "github:sailingscally/ssd1306"
   }
 }
