@@ -20,12 +20,14 @@
  */
 
 const { Gpio } = require('onoff');
+const { WeatherAlert } = require('r9t-commons');
 
 const os = require('os');
 const mqtt = require('mqtt');
 
 const grand9k = require('grand9k');
 const ssd1306 = require('ssd1306');
+const commons = require('r9t-commons');
 
 const TextAlign = {
   RIGHT: 0b001,
@@ -35,18 +37,14 @@ const TextAlign = {
 
 const Screen = {
   SPLASH: 0,
-  TEMPERATURE: 1,
-  PRESSURE: 2,
-  HUMIDITY: 3,
-  ALARM: 4,
-  WEATHER: 5,
-  VOLTAGE: 6
-}
-
-const sleep = (ms) => {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
+  TIME: 1, // TODO: add clock screen (what about timezones and DST - config?)
+  TEMPERATURE: 2,
+  PRESSURE: 3,
+  HUMIDITY: 4,
+  BAROGRAPH: 5,
+  WEATHER: 6,
+  ALARM: 7,
+  VOLTAGE: 8
 }
 
 const address = () => {
@@ -103,6 +101,10 @@ client.on('message', (topic, message) => {
     case 'weather/humidity':
       values.humidity = parseFloat(message);
       humidity(values.humidity);
+      break;
+    case "weather/barograph":
+      const data = JSON.parse(message);
+      barograph(data);
       break;
     case 'alarm/weather':
       values.alarm = parseInt(message, 2);
@@ -229,12 +231,78 @@ const humidity = async (value) => {
   }
 }
 
+let job = undefined;
+let anim = 0;
+
+const barograph = async (data) => {
+  const axis = ssd1306.width() - 24 * 4;
+
+  if(data) {
+    clearInterval(job);
+    
+    // get the range of barometric pressure values
+    const range = data.reduce((result, row) => {
+      if(row.pressure > result.max) {
+        result.max = row.pressure;
+      }
+      if(row.pressure < result.min) {
+        result.min = row.pressure;
+      }
+
+      return result;
+    }, { max: data[0].pressure, min: data[0].pressure });
+
+    await print(range.max.toFixed(0), TextAlign.LEFT, 0);
+    await print(range.min.toFixed(0), TextAlign.LEFT, 3);
+
+    // calculate the multiplication factor so the range uses as much screen height as possible
+    const factor = Math.floor(23 / (range.max - range.min));
+    const floor = Math.floor(factor * range.min); // this is the minimum value that will print
+
+    // calculate the adjusted true range and center it (small adjustment)
+    let _true = Math.floor(factor * range.max) - Math.floor(factor * range.min);
+    _true = Math.ceil((23 - _true) / 2);
+    
+    const buffer = new Array(24 * 4 * 3); // 3 pages
+
+    for(let i = 0; i < data.length; i ++) {
+      const shift = Math.floor(factor * data[i].pressure - floor) + _true;
+      const binary = 0b100000000000000000000000 >> shift;
+      
+      // the lsb is at the top of the page (the code below prints a nice ASCII art barograph)
+      // console.log(shift.toString().padStart(2, 0) + ' | 0b' + binary.toString(2).padStart(24, 0));
+
+      buffer[i] = binary & 0xff;
+      buffer[i + 24 * 4] = (binary >> 8) & 0xff;
+      buffer[i + 24 * 4 * 2] = (binary >> 16) & 0xff;
+    }
+
+    await ssd1306.display(buffer, axis, 1, 24 * 4, 3);
+  } else {
+    await print('Barograph', TextAlign.CENTER, 0);    
+    await ssd1306.display([0xff, 0xff, 0xff], axis - 1, 1, 1, 3);
+
+    job = setInterval(async () => {
+      await ssd1306.display([0b10000000, 0b00000001], anim ++, 1, 1, 2);
+      if(anim == axis - 2) {
+        anim = 0;
+      }
+    }, 100); // 100ms
+
+    if(connected) {
+      client.publish('storm/barograph', JSON.stringify({ fetch: true }));
+    }
+  }
+}
+
 const weather = async () => {
   if(ready) {
     await print('Temp.:', TextAlign.LEFT, 0);
     await print('Pressure:', TextAlign.LEFT, 1);
     await print('Humidity:', TextAlign.LEFT, 2);
     await print('Alarm:', TextAlign.LEFT, 3);
+
+    // TODO: print previous values to the screen
   }
 }
 
@@ -243,11 +311,11 @@ const alarm = async (value, interrupt) => {
     return;
   }
   
-  // TODO: parse alert values
   // TODO: print value in WEATHER screen
+  // TODO: ignore interrups with the same or lower alert within the same hour
 
-  // only react to alerts greater than strong wind
-  if(value < 0b00001000) {
+  // only react to interrupts to alerts greater than strong wind
+  if(value < WeatherAlert.STRONG_WIND) {
     return;
   }
   
@@ -260,7 +328,7 @@ const alarm = async (value, interrupt) => {
   console.log('Weather alert: 0b' + value.toString(2).padStart(8, 0));
 
   if(interrupt) {
-    await sleep(10000);
+    await commons.sleep(10000);
     ready = true;
     
     await rotate(); // go back to original screen
@@ -288,6 +356,9 @@ const rotate = async () => {
       break;
     case Screen.HUMIDITY:
       await humidity(values.humidity);
+      break;
+    case Screen.BAROGRAPH:
+      await barograph();
       break;
     case Screen.WEATHER:
       await weather();
@@ -347,6 +418,10 @@ const print = async (text, align = TextAlign.LEFT, page = 0) => {
     offset = ssd1306.width() - buffer.length;
   }
 
+  if(align == TextAlign.CENTER) {
+    offset = Math.floor((ssd1306.width() - buffer.length) / 2);
+  }
+
   await ssd1306.display(buffer, offset, page, buffer.length, 1);
 }
 
@@ -374,7 +449,7 @@ const splash = async () => {
 const start = async () => {
   await reset();
   await splash();
-  await sleep(10000);
+  await commons.sleep(10000);
 
   ready = true;
 
