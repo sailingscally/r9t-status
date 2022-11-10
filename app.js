@@ -234,12 +234,38 @@ const humidity = async (value) => {
 let job = undefined;
 let anim = 0;
 
+/**
+ * Draws a rectangle 64 pixels wide in the center of the display (on the 3rd page).
+ * 0-31 is margin, 32-95 is the actual rectangle and 96 to 127 is margin.
+ */
+const rectangle = async () => {
+  const buffer = new Array(ssd1306.width() / 2);
+  buffer.fill(0b10000001, 1, 63); // top and bottom horizontal lines
+  buffer[0] = 0xff; // left vertical line
+  buffer[63] = 0xff; // right vertical line
+
+  await ssd1306.display(buffer, 32, 2, 64, 1);
+}
+
+const loading = async () => {
+  if(anim == 60) {
+    // clear and start over
+    await rectangle();
+    anim = 0;
+  }
+
+  await ssd1306.display([0b10111101], 34 + anim ++, 2, 1, 1); // starts in column 34
+}
+
 const barograph = async (data) => {
   const axis = ssd1306.width() - 24 * 4;
 
   if(data) {
     clearInterval(job);
-    
+    anim = 0;
+
+    await ssd1306.clear();
+
     // get the range of barometric pressure values
     const range = data.reduce((result, row) => {
       if(row.pressure > result.max) {
@@ -252,41 +278,35 @@ const barograph = async (data) => {
       return result;
     }, { max: data[0].pressure, min: data[0].pressure });
 
-    await print(range.max.toFixed(0), TextAlign.LEFT, 0);
-    await print(range.min.toFixed(0), TextAlign.LEFT, 3);
+    await ssd1306.display([0xff, 0xff, 0xff, 0xff], axis - 1, 0, 1, 4);
+    await print(range.max.toFixed(0), TextAlign.RIGHT, 0, 24 * 4 + 6);
+    await print(range.min.toFixed(0), TextAlign.RIGHT, 3, 24 * 4 + 6);
 
     // calculate the multiplication factor so the range uses as much screen height as possible
-    const factor = Math.floor(23 / (range.max - range.min));
+    const factor = Math.floor(31 / (range.max - range.min)); // from 0 to 31 = 32 values
     const floor = Math.floor(factor * range.min); // this is the minimum value that will print
 
     // calculate the adjusted true range and center it (small adjustment)
     let _true = Math.floor(factor * range.max) - Math.floor(factor * range.min);
-    _true = Math.ceil((23 - _true) / 2);
-    
-    const buffer = new Array(24 * 4 * 3); // 3 pages
+    _true = Math.ceil((31 - _true) / 2); // from 0 to 31 = 32 values
+
+    const buffer = new Array(24 * 4 * 4); // 4 pages
+    buffer.fill(0);
 
     for(let i = 0; i < data.length; i ++) {
       const shift = Math.floor(factor * data[i].pressure - floor) + _true;
-      const binary = 0b100000000000000000000000 >> shift;
-      
-      // the lsb is at the top of the page (the code below prints a nice ASCII art barograph)
-      // console.log(shift.toString().padStart(2, 0) + ' | 0b' + binary.toString(2).padStart(24, 0));
+      const bytes = Math.floor(shift / 8);
 
-      buffer[i] = binary & 0xff;
-      buffer[i + 24 * 4] = (binary >> 8) & 0xff;
-      buffer[i + 24 * 4 * 2] = (binary >> 16) & 0xff;
+      buffer[i + 24 * 4 * (3 - bytes)] = 0b10000000 >> (shift % 8);
     }
 
-    await ssd1306.display(buffer, axis, 1, 24 * 4, 3);
+    await ssd1306.display(buffer, axis, 0, 24 * 4, 4);
   } else {
-    await print('Barograph', TextAlign.CENTER, 0);    
-    await ssd1306.display([0xff, 0xff, 0xff], axis - 1, 1, 1, 3);
+    await print('Barograph', TextAlign.CENTER, 0);
+    await rectangle();
 
     job = setInterval(async () => {
-      await ssd1306.display([0b10000000, 0b00000001], anim ++, 1, 1, 2);
-      if(anim == axis - 2) {
-        anim = 0;
-      }
+      await loading();
     }, 100); // 100ms
 
     if(connected) {
@@ -409,17 +429,19 @@ const stretch = (byte) => {
  * Prints the given text to the specified page. Multiple calls can be made to write text to the same page
  * if the text is small enough and each text has different alignments.
  */
-const print = async (text, align = TextAlign.LEFT, page = 0) => {
+const print = async (text, align = TextAlign.LEFT, page = 0, margin = 0) => {
   const buffer = grand9k.get(text);
 
   let offset = 0;
 
-  if(align == TextAlign.RIGHT) {
-    offset = ssd1306.width() - buffer.length;
+  if(align == TextAlign.LEFT) {
+    offset = margin;
   }
-
   if(align == TextAlign.CENTER) {
     offset = Math.floor((ssd1306.width() - buffer.length) / 2);
+  }
+  if(align == TextAlign.RIGHT) {
+    offset = ssd1306.width() - buffer.length - margin;
   }
 
   await ssd1306.display(buffer, offset, page, buffer.length, 1);
